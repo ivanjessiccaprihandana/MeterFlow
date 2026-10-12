@@ -1,0 +1,8 @@
+.git
+.github
+.tools
+.env
+bin
+coverage.out
+load-tests/results
+*.log

@@ -1,0 +1,13 @@
+services:
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.prebuilt
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.prebuilt
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.prebuilt

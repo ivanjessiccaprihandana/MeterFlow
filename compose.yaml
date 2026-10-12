@@ -1,0 +1,76 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: meterflow
+      POSTGRES_PASSWORD: meterflow
+      POSTGRES_DB: meterflow
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meterflow"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+  redis:
+    image: redis:7.4-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+  migrate:
+    build: .
+    image: meterflow:local
+    env_file: [.env]
+    command: ["migrate"]
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+  api:
+    build: .
+    image: meterflow:local
+    env_file: [.env]
+    command: ["serve"]
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  worker:
+    build: .
+    image: meterflow:local
+    env_file: [.env]
+    command: ["worker"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+  integration:
+    image: golang:1.24-alpine
+    profiles: ["test"]
+    working_dir: /src
+    volumes: [".:/src"]
+    environment:
+      DATABASE_URL: postgres://meterflow:meterflow@postgres:5432/meterflow?sslmode=disable
+      REDIS_ADDR: redis:6379
+      JWT_SECRET: integration-test-secret-at-least-32-bytes
+    command: ["go", "test", "-tags=integration", "-count=1", "./..."]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+  k6:
+    image: grafana/k6:0.54.0
+    profiles: ["load"]
+    volumes: ["./load-tests:/scripts"]
+    environment: {BASE_URL: "http://api:8080"}
+    depends_on:
+      api: {condition: service_healthy}
+volumes:
+  postgres_data:

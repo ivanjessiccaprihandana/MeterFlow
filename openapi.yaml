@@ -1,0 +1,96 @@
+openapi: 3.1.0
+info:
+  title: MeterFlow API
+  version: 0.1.0
+  description: Multi-tenant subscription and usage billing API. Money fields are integer minor units; periods are UTC half-open intervals.
+servers: [{url: "http://localhost:8080"}]
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT-or-API-key}
+  schemas:
+    Problem:
+      type: object
+      required: [title, status, detail]
+      properties: {type: {type: string}, title: {type: string}, status: {type: integer}, detail: {type: string}}
+    UsageEvent:
+      type: object
+      required: [idempotency_key, meter, quantity]
+      properties:
+        idempotency_key: {type: string, maxLength: 200}
+        meter: {type: string, maxLength: 100}
+        quantity: {type: integer, format: int64, minimum: 1}
+        occurred_at: {type: string, format: date-time}
+        metadata: {type: object, additionalProperties: true}
+    Invoice:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        currency: {type: string, minLength: 3, maxLength: 3}
+        status: {type: string, enum: [draft, open, paid, void]}
+        total_minor: {type: integer, format: int64}
+paths:
+  /health/live:
+    get: {operationId: liveness, responses: {'200': {description: Alive}}}
+  /health/ready:
+    get: {operationId: readiness, responses: {'200': {description: Dependencies ready}, '503': {description: Dependency unavailable}}}
+  /v1/auth/login:
+    post:
+      operationId: login
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [email,password,tenant], properties: {email: {type: string, format: email}, password: {type: string}, tenant: {type: string}}}}}}
+      responses: {'200': {description: Access and refresh tokens}, '401': {description: Invalid credentials}}
+  /v1/auth/refresh:
+    post:
+      operationId: refreshToken
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [refresh_token,tenant], properties: {refresh_token: {type: string}, tenant: {type: string}}}}}}
+      responses: {'200': {description: Rotated tokens}, '401': {description: Invalid or replayed token}}
+  /v1/api-keys:
+    post:
+      security: [{bearerAuth: []}]
+      operationId: createAPIKey
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [name,scopes], properties: {name: {type: string}, scopes: {type: array, items: {type: string}}}}}}}
+      responses: {'201': {description: Key shown once}, '403': {description: Forbidden}}
+  /v1/usage:
+    post:
+      security: [{bearerAuth: []}]
+      operationId: recordUsage
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UsageEvent'}}}}
+      responses: {'201': {description: Recorded}, '200': {description: Duplicate replay}, '429': {description: Rate limited}}
+  /v1/subscription:
+    get: {security: [{bearerAuth: []}], operationId: currentSubscription, responses: {'200': {description: Current subscription}}}
+  /v1/subscription/change:
+    post:
+      security: [{bearerAuth: []}]
+      operationId: changePlan
+      parameters:
+        - {in: header, name: Idempotency-Key, required: true, schema: {type: string, maxLength: 200}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [plan_code], properties: {plan_code: {type: string}}}}}}
+      responses: {'200': {description: Applied or scheduled}, '409': {description: Conflict}}
+  /v1/invoices:
+    get: {security: [{bearerAuth: []}], operationId: listInvoices, responses: {'200': {description: Invoice list}}}
+  /v1/invoices/generate:
+    post:
+      security: [{bearerAuth: []}]
+      operationId: generateInvoice
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [period_start,period_end], properties: {period_start: {type: string, format: date-time}, period_end: {type: string, format: date-time}}}}}}
+      responses: {'201': {description: Generated, content: {application/json: {schema: {$ref: '#/components/schemas/Invoice'}}}}, '409': {description: Duplicate or invalid period}}
+  /v1/invoices/{invoiceID}/pay:
+    post:
+      security: [{bearerAuth: []}]
+      operationId: createSandboxPayment
+      parameters:
+        - {in: path, name: invoiceID, required: true, schema: {type: string, format: uuid}}
+        - {in: header, name: Idempotency-Key, required: true, schema: {type: string, maxLength: 200}}
+      responses: {'201': {description: Pending sandbox payment}, '409': {description: Invoice is not open or key conflict}}
+  /v1/webhooks/sandbox:
+    post:
+      operationId: sandboxWebhook
+      parameters:
+        - {in: header, name: X-Sandbox-Timestamp, required: true, schema: {type: string}}
+        - {in: header, name: X-Sandbox-Signature, required: true, schema: {type: string}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object}}}}
+      responses: {'200': {description: Processed or duplicate}, '401': {description: Invalid signature}}
+  /v1/admin/audit-logs:
+    get:
+      security: [{bearerAuth: []}]
+      operationId: listAuditLogs
+      responses: {'200': {description: Tenant audit trail}, '403': {description: Owner or admin required}}
